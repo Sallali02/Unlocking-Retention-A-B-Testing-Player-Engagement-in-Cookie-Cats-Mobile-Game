@@ -1,0 +1,426 @@
+---
+title: "Project"
+output: html_document
+---
+
+# **Unlocking Retention: A/B Testing Player Engagement in Cookie Cats Mobile Game**
+
+#### This project analyzes real-world A/B testing data from the mobile game Cookie Cats, in which developers tested the impact of moving the first in-game gate from level 30 (control group) to level 40 (test group). The goal is to evaluate how this design change affects both short-term (1-day) and long-term (7-day) player retention.
+
+#### Using R, I began with **classical hypothesis testing** and **exploratory data visualization** to compare retention outcomes between the two groups. To deepen the analysis, I applied **survival analysis techniques** to model player engagement over time and conducted behavior-based segmentation.
+
+#### Beyond traditional methods, I implemented **causal inference approaches**—including **Propensity Score Matching (PSM)** and **Inverse Probability Weighting (IPW)**—to estimate the treatment effect while adjusting for potential covariate imbalances. I also incorporated **Bayesian inference** to provide a probabilistic interpretation of the A/B test results.
+
+#### Finally, I explored **heterogeneous treatment** effects by segmenting players based on engagement levels, uncovering how different user types responded to the gate placement. This comprehensive analysis provides actionable insights for game designers seeking to balance user experience with monetization strategies.
+
+#### **The Variables:**
+
+**- userid:** A unique number that identifies each player.
+
+**- version:** Whether the player was put in the control group (gate_30 - a gate at level 30) or the group with the moved gate (gate_40 - a gate at level 40).
+
+**- sum_gamerounds:** the number of game rounds played by the player during the first 14 days after install.
+
+**- retention_1:** Did the player come back and play 1 day after installing?
+
+**- retention_7:** Did the player come back and play 7 days after installing?
+
+
+##### Reading in data
+
+```{r}
+library(readr)
+
+data <- read_csv("cookie_cats.csv")
+
+head(data)
+
+```
+
+#### **Preliminary Analysis**
+
+```{r}
+# 🔍 1. Check structure and data types
+str(data)
+```
+
+```{r}
+# 🔍 2. Summary statistics
+summary(data)
+
+```
+
+```{r}
+# 🔍 3. Check for missing values
+colSums(is.na(data))
+
+# Pretty summary with skimr
+library(skimr)
+skim(data)
+
+```
+
+```{r}
+# 🔍 4. Count of each group in 'version'
+table(data$version)
+
+```
+
+```{r}
+# 🔍 5. Check player retention counts
+table(data$retention_1)
+table(data$retention_7)
+
+# Cross-tabulation of version and retention
+table(data$version, data$retention_1)
+table(data$version, data$retention_7)
+
+```
+
+```{r}
+# 🔍 6. Distribution of 'sum_gamerounds'
+library(ggplot2)
+
+# Overall distribution
+ggplot(data, aes(x = sum_gamerounds)) +
+  geom_histogram(bins = 50, fill = "#2C3E50", color = "white") +
+  labs(title = "Distribution of Game Rounds", x = "Total Game Rounds", y = "Count")
+
+# Distribution by group
+ggplot(data, aes(x = sum_gamerounds, fill = version)) +
+  geom_histogram(position = "identity", alpha = 0.5, bins = 50) +
+  labs(title = "Game Rounds by A/B Group", x = "Game Rounds", y = "Count")
+
+```
+
+```{r}
+# 🔍 7. Check for duplicates in userid
+any(duplicated(data$userid))
+
+```
+
+```{r}
+# 🔍 8. Check proportions of retention logical variables
+prop.table(table(data$retention_1))
+prop.table(table(data$retention_7))
+
+```
+
+```{r}
+colSums(is.na(data))
+```
+
+```{r}
+summary(data$sum_gamerounds)
+boxplot(data$sum_gamerounds)
+```
+
+```{r}
+summary(data$sum_gamerounds > 1000)  # Counts how many exceed 1000 rounds
+```
+
+#### **Data Cleaning**
+
+```{r}
+# convert logical variables to numeric
+
+data <- data %>%
+  mutate(
+    retention_1 = as.integer(retention_1),
+    retention_7 = as.integer(retention_7)
+  )
+
+```
+
+```{r}
+# convert version variable to factor
+data$version <- factor(data$version)
+levels(data$version)
+
+```
+
+```{r}
+# removing users who played more than 1000 rounds
+data <- data %>%
+  filter(sum_gamerounds <= 1000)
+nrow(data)
+```
+
+#### **Exploratory Data Analysis**
+
+```{r}
+# overview of group sizes (control vs. test)
+
+library(ggplot2)
+
+# Count of users per group
+table(data$version)
+
+# Visualize group sizes
+ggplot(data, aes(x = version)) +
+  geom_bar(fill = "#4C72B0") +
+  labs(title = "Number of Players per Version Group", x = "Version", y = "Count")
+
+```
+
+```{r}
+# retention rates by group
+library(dplyr)
+
+# Calculate mean retention rates per group
+retention_summary <- data %>%
+  group_by(version) %>%
+  summarise(
+    retention_1_rate = mean(retention_1),
+    retention_7_rate = mean(retention_7)
+  )
+print(retention_summary)
+
+# Visualize retention rates
+retention_summary_long <- retention_summary %>%
+  tidyr::pivot_longer(cols = starts_with("retention"), names_to = "retention_day", values_to = "rate")
+
+ggplot(retention_summary_long, aes(x = version, y = rate, fill = retention_day)) +
+  geom_col(position = "dodge") +
+  scale_fill_manual(values = c("#55A868", "#C44E52"), labels = c("Day 1", "Day 7")) +
+  labs(title = "Retention Rates by Version Group", y = "Retention Rate", x = "Version") +
+  ylim(0,1)
+
+```
+
+```{r}
+# distribution of game rounds played (engagement)
+
+ggplot(data, aes(x = sum_gamerounds)) +
+  geom_histogram(bins = 50, fill = "#4C72B0", color = "white") +
+  labs(title = "Distribution of Total Game Rounds Played", x = "Game Rounds", y = "Count")
+
+# Distribution by version group
+ggplot(data, aes(x = sum_gamerounds, fill = version)) +
+  geom_histogram(position = "identity", alpha = 0.5, bins = 50) +
+  labs(title = "Game Rounds by Version Group", x = "Game Rounds", y = "Count")
+
+```
+
+```{r}
+# retention vs. engagement
+
+ggplot(data, aes(x = sum_gamerounds, y = retention_7, color = version)) +
+  geom_jitter(height = 0.05, alpha = 0.4) +
+  labs(title = "Retention at Day 7 vs. Game Rounds Played", x = "Game Rounds", y = "Retention Day 7") +
+  scale_y_continuous(breaks = c(0,1), labels = c("No", "Yes"))
+
+```
+
+```{r}
+ggplot(data, aes(x = sum_gamerounds, fill = version)) +
+  geom_histogram(binwidth = 20) +
+  labs(title = "Distribution of Game Rounds by Group")
+
+```
+
+```{r}
+# hypothesis testing (A/B testing core)
+
+# Day 1 retention
+t.test(retention_1 ~ version, data = data)
+
+# Day 7 retention
+t.test(retention_7 ~ version, data = data)
+
+# Shows if the gate change had a statistically significant effect on retention.
+```
+
+📆 Day 1 Retention A Welch Two Sample t-test was conducted to compare Day 1 retention between the two groups. The mean retention rate for players in the gate_30 group was 44.8%, compared to 44.2% in the gate_40 group. Although the gate_30 group had slightly higher retention, the difference was not statistically significant (p = 0.068). This suggests that moving the gate did not have a strong impact on whether players returned the next day.
+
+📆 Day 7 Retention For Day 7 retention, the Welch t-test showed a statistically significant difference between the two groups (p = 0.0013). The gate_30 group had a higher retention rate (18.9%) than the gate_40 group (18.1%). Since the p-value is well below 0.05 and the confidence interval does not include zero, this result suggests that players were more likely to return after one week if the first gate was placed at level 30.
+
+```{r}
+# survival analysis (engagement over time)
+
+library(survival)
+library(survminer)
+
+# Create survival object: did they stay beyond x rounds?
+surv_obj <- Surv(data$sum_gamerounds, data$retention_7)
+
+# Fit model by group
+fit <- survfit(surv_obj ~ version, data = data)
+
+# Plot
+ggsurvplot(fit, data = data, pval = TRUE, conf.int = TRUE,
+           title = "Survival of Player Engagement by Version",
+           xlab = "Game Rounds", ylab = "Survival Probability")
+
+# Shows how quickly players drop off, and whether one group stays longer.
+```
+
+This plot shows how long players stay engaged with the game (measured in game rounds) for each version group. The survival curves decline as players drop off, meaning fewer users continue playing as the number of rounds increases. Although the difference between the two groups is small, the gate_30 group had slightly higher engagement, and the difference is statistically significant (p = 0.0074). This suggests that placing the gate earlier (at level 30) may help retain players longer over time.
+
+```{r}
+# causal inference (beyond simple comparison)
+
+library(MatchIt)
+
+# Match players based on gamerounds
+match <- matchit(version ~ sum_gamerounds, data = data, method = "nearest")
+matched_data <- match.data(match)
+
+# Check effect on retention
+t.test(retention_7 ~ version, data = matched_data)
+
+# Mimics randomized conditions by balancing confounders → stronger evidence for causality.
+```
+
+To better estimate the true effect of gate placement on long-term retention, we used a matching method to control for differences between players. After matching, the average 7-day retention was 18.9% for the gate_30 group and 16.8% for the gate_40 group. This difference is statistically significant (p \< 0.001), with a 95% confidence interval of about 1.6% to 2.6%. This suggests that, even after adjusting for player behavior, placing the gate earlier (at level 30) leads to higher player retention after one week.
+
+```{r}
+# bayesian inference (probabilistic inference)
+
+library(bayesAB)
+
+# Bayesian A/B test for retention_1
+bayesAB::bayesTest(
+  data$retention_1[data$version == "gate_30"],
+  data$retention_1[data$version == "gate_40"],
+  priors = c("alpha" = 1, "beta" = 1)
+)
+
+# Adds uncertainty estimates and interpretable probabilities (e.g., 87% chance gate_30 is better).
+```
+
+To complement the classical statistical tests, a Bayesian A/B test was conducted on Day 1 retention using a Bernoulli distribution (for binary outcomes) and Beta(1,1) priors. The results show that the posterior means of retention are approximately 44.8% for gate_30 and 44.2% for gate_40, which aligns closely with the earlier t-test findings.
+
+By generating 100,000 Monte Carlo samples, we can interpret the results probabilistically—for example, we can estimate the probability that gate_30 performs better than gate_40. While the actual probability comparison isn't shown here, the Bayesian approach allows for statements like:
+
+“There’s an X% chance that gate_30 leads to higher Day 1 retention.”
+
+This method adds an intuitive, probability-based interpretation to support the conclusion that gate_30 may have a slight edge in early retention, though the difference remains small.
+
+```{r}
+# heterogeneous treatment effects
+
+# Example: split by median game rounds
+data <- data %>%
+  mutate(user_type = ifelse(sum_gamerounds > median(sum_gamerounds), "heavy", "light"))
+
+# Compare retention in subgroups
+data %>%
+  group_by(version, user_type) %>%
+  summarise(retention_7 = mean(retention_7))
+
+# Finds if certain types of users benefit more from the change.
+```
+
+To explore whether the gate placement had different effects on different types of players, we split users into two groups: light users (played fewer rounds) and heavy users (played more than the median number of rounds). We then compared 7-day retention within each subgroup.
+
+Among heavy users, the gate_30 group had a slightly higher 7-day retention rate (35.1%) compared to gate_40 (33.9%). Among light users, both groups had very low retention, with nearly identical rates around 2.6%.
+
+This suggests that the positive effect of placing the gate at level 30 is more pronounced among highly engaged (heavy) players, while it has little to no impact on casual (light) players.
+
+```{r}
+# visual summary table
+
+library(gt)
+
+data %>%
+  group_by(version) %>%
+  summarise(
+    mean_gamerounds = mean(sum_gamerounds),
+    retention_1_rate = mean(retention_1),
+    retention_7_rate = mean(retention_7)
+  ) %>%
+  gt() %>%
+  tab_header(title = "Key Metrics by Version Group")
+
+```
+
+The table above compares average player behavior across the two version groups. On average, players in the gate_30 group played slightly more rounds (49.8) than those in gate_40 (49.5). Similarly, the retention rates for both Day 1 and Day 7 were higher in the gate_30 group:
+
+Day 1 retention: 44.8% (gate_30) vs. 44.2% (gate_40)
+
+Day 7 retention: 18.9% (gate_30) vs. 18.1% (gate_40)
+
+Although the differences are small, this consistent pattern suggests that placing the gate earlier (at level 30) may lead to slightly better engagement and retention.
+
+```{r}
+# causal inference - deeper models
+# To estimate treatment effects by weighting users by the inverse probability of being in their group.
+
+# Estimate propensity scores
+ps_model <- glm(version ~ sum_gamerounds, data = data, family = "binomial")
+data$pscore <- predict(ps_model, type = "response")
+
+# Calculate weights
+data$weights <- ifelse(data$version == "gate_30", 1 / data$pscore, 1 / (1 - data$pscore))
+
+# Weighted regression
+weighted_model <- glm(retention_7 ~ version, data = data, weights = weights, family = "binomial")
+summary(weighted_model)
+
+```
+
+To estimate the causal effect of gate placement on 7-day retention, we used a weighted logistic regression model. The results show that being in the gate_40 group is associated with a statistically significant decrease in the likelihood of 7-day retention compared to the gate_30 group. The effect size (coefficient = -0.06) corresponds to a small but meaningful drop in retention probability, and the p-value (\< 0.001) confirms this result is statistically significant.
+
+
+##### Predictive Modeling - will a player stay?
+
+```{r}
+# Create user_type column
+median_rounds <- median(data$sum_gamerounds)
+data <- data %>%
+  mutate(user_type = ifelse(sum_gamerounds > median_rounds, "heavy", "light"),
+         user_type = factor(user_type))
+
+```
+
+```{r}
+# Logistic regression to predict retention at Day 7
+model <- glm(retention_7 ~ version + sum_gamerounds + user_type,
+             data = data, family = "binomial")
+summary(model)
+
+```
+
+The logistic regression model was used to predict whether a player would return to the game after 7 days, based on their gate group (version), the number of game rounds played, and whether they were classified as a heavy or light user. The results showed that all three variables were statistically significant predictors of retention. Specifically, players in the gate_40 group were slightly less likely to return compared to those in the gate_30 group. The number of game rounds played was positively associated with retention, meaning the more a player engaged with the game, the higher the likelihood they would return on Day 7. Additionally, user type played an important role—light users were significantly less likely to return compared to heavy users. These findings suggest that both engagement level and gate placement have meaningful effects on player retention.
+
+
+```{r}
+# Predicted probability of retention
+data$predicted_prob <- predict(model, type = "response")
+
+# Classify as 1 if probability > 0.5, else 0
+data$predicted_class <- ifelse(data$predicted_prob > 0.5, 1, 0)
+
+```
+
+```{r}
+library(caret)
+
+confusionMatrix(
+  factor(data$predicted_class),
+  factor(data$retention_7),
+  positive = "1"
+)
+
+```
+
+The confusion matrix shows how well the model predicted whether a player would return after 7 days (retention_7 = 1). The model has an overall accuracy of 87%, meaning it correctly classified most players. However, this high accuracy is mainly driven by the large number of players who did not return, since most players belong to that category (reflected in the No Information Rate of 81.5%).
+
+Looking deeper, the model’s sensitivity (its ability to correctly identify players who did return) is around 42%, which means it catches less than half of the true returning players. On the other hand, the specificity is high at 97%, showing that it’s very good at identifying players who didn’t return.
+
+This tells us the model is strong at predicting non-returning players, but less effective at identifying those who stay, which is common when the data is imbalanced (i.e., fewer retained players). The Kappa score of 0.47 also suggests moderate agreement between predicted and actual outcomes, better than chance but not ideal.
+
+
+```{r}
+library(pROC)
+
+roc_obj <- roc(data$retention_7, data$predicted_prob)
+plot(roc_obj, main = "ROC Curve for Predicting Day 7 Retention")
+auc(roc_obj)
+
+```
+
+The ROC curve evaluates how well the model distinguishes between players who stay and those who don’t after 7 days. The AUC (Area Under the Curve) is 0.8871, which indicates that the model has excellent predictive ability. An AUC close to 1 means the model is very good at correctly classifying both retained and non-retained players. In this case, it suggests the model performs very well in predicting Day 7 retention.
+
+
