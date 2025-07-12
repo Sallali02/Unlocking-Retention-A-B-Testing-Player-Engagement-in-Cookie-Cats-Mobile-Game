@@ -1,0 +1,2 @@
+# Unlocking-Retention-A-B-Testing-Player-Engagement-in-Cookie-Cats-Mobile-Game
+This project analyzes real-world A/B test data from the mobile game Cookie Cats, where players were randomly assigned to experience a gate at level 30 or level 40. Using R, I applied statistical testing, causal inference, survival analysis, and logistic regression to understand how gate placement affects short- and long-term player retention.
